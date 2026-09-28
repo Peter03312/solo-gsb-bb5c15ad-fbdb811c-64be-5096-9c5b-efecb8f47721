@@ -1034,6 +1034,138 @@ function renderCalibration(calibration) {
   chart.appendChild(axisRow);
 }
 
+// ---------------------------------------------------------------------------
+// 题数规划器（上传页独立工具）
+//
+// 输入预期正确率 p（0.51～0.99）、α（0.01/0.05/0.10）、目标功效
+//（0.80/0.90/0.95），由服务端用精确二项尾概率逐 n=1..50 计算：
+// 每个 n 取满足 P[Bin(n,0.5)≥k] ≤ α 的最小门槛 k（无则跳过），
+// 再算 P[Bin(n,p)≥k]；返回功效达标的最小 n。
+// 规划过程不创建会话；推荐题数可一键填入现有题数字段，由用户自行开始测试。
+// ---------------------------------------------------------------------------
+
+const PLAN_P_MIN = 0.51;
+const PLAN_P_MAX = 0.99;
+const PLAN_ALPHA_SET = new Set(['0.01', '0.05', '0.1']);
+const PLAN_POWER_SET = new Set(['0.8', '0.9', '0.95']);
+
+/** 概率百分数格式化：100% / 0% 边界原样显示，中间值保留 3 位百分数，过小用 < 0.001% */
+function fmtProb(q) {
+  if (q == null || !Number.isFinite(q)) return '—';
+  if (q >= 1) return '100%';
+  if (q <= 0) return '0%';
+  const pct = q * 100;
+  if (pct < 0.001) return '< 0.001%';
+  return `${pct.toFixed(3)}%`;
+}
+
+function renderPlan(data) {
+  const { params, recommendation, rows } = data;
+  const summary = $('#planSummary');
+  const tbody = $('#planTable tbody');
+  tbody.innerHTML = '';
+
+  for (const row of rows) {
+    const tr = document.createElement('tr');
+    if (row.k === null) {
+      // 题数过少：即使全对仍无法把假阳性压到 α 以内，无可行门槛
+      tr.innerHTML =
+        `<td>${row.n}</td><td>—（无门槛）</td><td>—</td><td>—</td>`;
+    } else {
+      const reached = row.power >= params.targetPower;
+      tr.innerHTML =
+        `<td>${row.n}</td>` +
+        `<td>≥ ${row.k} 题</td>` +
+        `<td>${fmtProb(row.falsePositive)}</td>` +
+        `<td class="${reached ? 'power-ok' : 'power-low'}">${fmtProb(row.power)}</td>`;
+    }
+    tbody.appendChild(tr);
+  }
+
+  let recRow = null;
+  if (recommendation) {
+    recRow = tbody.children[recommendation.n - 1];
+    if (recRow) recRow.classList.add('recommended');
+    summary.className = 'plan-summary feasible';
+    summary.innerHTML =
+      `<p class="plan-title">✓ 推荐题数：<strong>${recommendation.n} 题</strong>` +
+      `（判定门槛：答对 ≥ ${recommendation.k} 题）</p>` +
+      `<p class="hint">在 α = ${params.alpha.toFixed(2)}、p = ${params.p.toFixed(2)} 下，` +
+      `实际功效 ${fmtProb(recommendation.actualPower)}（目标 ≥ ${fmtProb(params.targetPower)}），` +
+      `假阳性概率 ${fmtProb(recommendation.falsePositive)}（上限 ${fmtProb(params.alpha)}）。` +
+      `这是 1～50 题范围内满足假阳性 ≤ α 且功效达标的最小题数。</p>` +
+      `<button id="btnUsePlan" class="primary">将 ${recommendation.n} 填入题数字段</button>`;
+  } else {
+    // 无可行题数：50 题内不存在同时满足假阳性 ≤ α 与目标功效的门槛
+    summary.className = 'plan-summary infeasible';
+    summary.innerHTML =
+      '<p class="plan-title">✗ 50 题以内无可行题数</p>' +
+      `<p class="hint">在 p = ${params.p.toFixed(2)}、α = ${params.alpha.toFixed(2)} 时，` +
+      `1～50 题内不存在「假阳性 ≤ ${fmtProb(params.alpha)}」且` +
+      `「功效 ≥ ${fmtProb(params.targetPower)}」的题数与门槛组合。` +
+      `可提高预期正确率、放宽 α 或降低目标功效后重新计算。</p>`;
+  }
+  summary.classList.remove('hidden');
+  $('#planTableWrap').classList.remove('hidden');
+
+  const btnUse = $('#btnUsePlan');
+  if (btnUse) {
+    btnUse.addEventListener('click', () => {
+      // 仅把推荐 n 填入现有题数字段；不选择音频、不创建会话，由用户自行开始测试
+      $('#numTrials').value = recommendation.n;
+      $('#numTrials').focus();
+      btnUse.textContent = `已填入：${recommendation.n} 题`;
+      btnUse.disabled = true;
+      $('#numTrials').scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }
+  if (recRow) recRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+$('#btnPlan').addEventListener('click', async () => {
+  const errEl = $('#planError');
+  errEl.textContent = '';
+  $('#planSummary').classList.add('hidden');
+  $('#planTableWrap').classList.add('hidden');
+
+  // 客户端先校验，越界或非数值输入直接拒绝，不发请求
+  const pRaw = $('#planP').value.trim();
+  const alphaRaw = $('#planAlpha').value;
+  const powerRaw = $('#planPower').value;
+  const p = Number(pRaw);
+  if (pRaw === '' || !Number.isFinite(p) || p < PLAN_P_MIN || p > PLAN_P_MAX) {
+    errEl.textContent = '预期正确率 p 必须是 0.51～0.99 之间的数值';
+    return;
+  }
+  if (!PLAN_ALPHA_SET.has(alphaRaw)) {
+    errEl.textContent = '显著性水平 α 只允许 0.01、0.05 或 0.10';
+    return;
+  }
+  if (!PLAN_POWER_SET.has(powerRaw)) {
+    errEl.textContent = '目标功效只允许 0.80、0.90 或 0.95';
+    return;
+  }
+
+  const btn = $('#btnPlan');
+  btn.disabled = true;
+  btn.textContent = '计算中…';
+  try {
+    const res = await fetch('/api/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p, alpha: Number(alphaRaw), power: Number(powerRaw) }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '规划计算失败');
+    renderPlan(data);
+  } catch (e) {
+    errEl.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '计算规划';
+  }
+});
+
 // 启动 UI 刷新循环，并探测本机是否有可恢复的未提交会话
 tick();
 initRecovery();

@@ -210,6 +210,75 @@ function removeDir(dir) {
   if (dir) fs.rm(dir, { recursive: true, force: true }, () => {});
 }
 
+// ---------------------------------------------------------------------------
+// 题数规划器（上传页独立工具）：纯计算接口，不创建会话、不落盘
+//
+// 对 n = 1..PLANNER_MAX_N 逐题考察单尾判定「答对 ≥ k 题则通过」：
+//   假阳性概率 = P[Bin(n, 0.5) ≥ k]（纯靠猜仍通过的概率）
+//   功效       = P[Bin(n, p)  ≥ k]（真实单题正确率为 p 时通过的概率）
+// k 取满足假阳性 ≤ α 的最小整数（1～n）；n 过小、连 k = n 都不满足时该 n 无门槛。
+// 全部使用精确二项尾概率直接求和（n ≤ 50），不使用正态近似。
+// ---------------------------------------------------------------------------
+
+const PLANNER_MAX_N = MAX_TRIALS; // 题数范围与上传页一致：1～50
+const PLANNER_P_MIN = 0.51;
+const PLANNER_P_MAX = 0.99;
+const PLANNER_ALPHAS = [0.01, 0.05, 0.1];
+const PLANNER_POWERS = [0.8, 0.9, 0.95];
+const PLANNER_EPS = 1e-12; // 仅用于吸收 ~1e-16 级浮点舍入误差，不放宽任何判定
+
+/**
+ * 逐 n 计算门槛、假阳性概率与功效，并返回功效达标的最小 n。
+ * 门槛 k 为 1～n 中使 P[Bin(n,0.5) ≥ k] ≤ α 的最小整数；
+ * 上尾概率随 k 严格递减，从 k=1 起第一个满足者即最小门槛。
+ * 返回 { rows, recommendation }；无任何 n 达标时 recommendation 为 null。
+ */
+function planSampleSize(p, alpha, targetPower) {
+  const rows = [];
+  let recommendation = null;
+  for (let n = 1; n <= PLANNER_MAX_N; n++) {
+    let k = null;
+    for (let cand = 1; cand <= n; cand++) {
+      if (binomUpperTail(n, cand, 0.5) <= alpha + PLANNER_EPS) {
+        k = cand;
+        break;
+      }
+    }
+    if (k === null) {
+      // 题数过少：即使全对（k = n），纯猜通过概率仍 > α，该 n 无可行门槛
+      rows.push({ n, k: null, falsePositive: null, power: null });
+      continue;
+    }
+    const falsePositive = binomUpperTail(n, k, 0.5);
+    const power = binomUpperTail(n, k, p);
+    rows.push({ n, k, falsePositive, power });
+    if (recommendation === null && power + PLANNER_EPS >= targetPower) {
+      recommendation = { n, k, actualPower: power, falsePositive };
+    }
+  }
+  return { rows, recommendation };
+}
+
+// 题数规划：只做精确二项计算，不创建会话、不写盘、不保存任何输入
+app.post('/api/plan', (req, res) => {
+  const body = req.body || {};
+  const p = Number(body.p);
+  const alpha = Number(body.alpha);
+  const targetPower = Number(body.power);
+  // 越界或非数值输入一律 400 拒绝（NaN / Infinity / 布尔 / 越界均落在此处）
+  if (!Number.isFinite(p) || p < PLANNER_P_MIN || p > PLANNER_P_MAX) {
+    return res.status(400).json({ error: '预期正确率 p 必须是 0.51～0.99 之间的数值' });
+  }
+  if (!PLANNER_ALPHAS.includes(alpha)) {
+    return res.status(400).json({ error: '显著性水平 α 只允许 0.01、0.05 或 0.10' });
+  }
+  if (!PLANNER_POWERS.includes(targetPower)) {
+    return res.status(400).json({ error: '目标功效只允许 0.80、0.90 或 0.95' });
+  }
+  const { rows, recommendation } = planSampleSize(p, alpha, targetPower);
+  res.json({ params: { p, alpha, targetPower }, recommendation, rows });
+});
+
 app.post('/api/session', (req, res) => {
   upload.fields([{ name: 'a', maxCount: 1 }, { name: 'b', maxCount: 1 }])(req, res, (err) => {
     if (err) {

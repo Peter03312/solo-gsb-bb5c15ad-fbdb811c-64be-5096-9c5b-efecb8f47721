@@ -51,6 +51,47 @@
         <button id="btnStart" class="primary">开始测试</button>
         <p id="uploadError" class="error"></p>
       </div>
+
+      <!-- 独立题数规划器：精确二项计算，仅给出推荐题数，不创建会话 -->
+      <div class="card planner-card" id="plannerCard">
+        <h2>题数规划器</h2>
+        <p class="hint">规划「答对至少 k 题才算通过」的单尾检验：在纯靠猜（单题正确率 0.5）时假阳性概率不超过 α，且你预期单题正确率为 p 时，达到目标功效所需的最小题数。全程使用精确二项尾概率（n ≤ 50 直接求和，非正态近似）。规划只做计算，<strong>不会创建会话</strong>；得到推荐题数后可一键填入上方题数字段，仍由你选择音频并开始测试。</p>
+        <div class="planner-fields">
+          <label class="field">
+            <span>预期正确率 p（0.51～0.99）</span>
+            <input type="number" id="planP" min="0.51" max="0.99" step="0.01" value="0.70" inputmode="decimal">
+          </label>
+          <label class="field">
+            <span>显著性水平 α</span>
+            <select id="planAlpha">
+              <option value="0.01">0.01</option>
+              <option value="0.05" selected>0.05</option>
+              <option value="0.1">0.10</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>目标功效（1 − β）</span>
+            <select id="planPower">
+              <option value="0.8" selected>0.80</option>
+              <option value="0.9">0.90</option>
+              <option value="0.95">0.95</option>
+            </select>
+          </label>
+        </div>
+        <button id="btnPlan" class="primary">计算规划</button>
+        <p id="planError" class="error"></p>
+        <div id="planSummary" class="plan-summary hidden"></div>
+        <div id="planTableWrap" class="plan-table-wrap hidden">
+          <table id="planTable">
+            <thead>
+              <tr>
+                <th>题数 n</th><th>通过门槛 k</th><th>假阳性概率 P[Bin(n,0.5)≥k]</th><th>功效 P[Bin(n,p)≥k]</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- 视图 2：测试 -->

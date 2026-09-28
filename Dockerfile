@@ -6,9 +6,9 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-# 先装依赖，充分利用镜像层缓存
-COPY package.json package-lock.json* ./
-RUN npm install --omit=dev
+# 先装依赖，充分利用镜像层缓存；npm ci 按 package-lock.json 精确安装
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 COPY server.js ./
 COPY public ./public
