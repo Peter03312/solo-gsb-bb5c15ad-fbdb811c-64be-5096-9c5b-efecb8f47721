@@ -1034,6 +1034,161 @@ function renderCalibration(calibration) {
   chart.appendChild(axisRow);
 }
 
+// ---------------------------------------------------------------------------
+// 题数规划器（上传页独立工具）：请求服务端精确二项尾概率计算结果并渲染。
+// 纯只读计算：不创建会话、不写 localStorage、不影响待恢复会话。
+// ---------------------------------------------------------------------------
+
+const PLANNER_P_MIN = 0.51;
+const PLANNER_P_MAX = 0.99;
+const PLANNER_ALPHAS = [0.01, 0.05, 0.10];
+const PLANNER_POWERS = [0.80, 0.90, 0.95];
+let planResult = null; // 最近一次规划结果（仅用于「填入题数字段」）
+
+/** 百分数格式：固定两位小数后去掉多余的 0（如 0.05 → 5%，0.0107 → 1.07%） */
+function pct(x) {
+  let s = (x * 100).toFixed(2);
+  s = s.replace(/0+$/, '').replace(/\.$/, '');
+  return s + '%';
+}
+
+/** 规划器输入校验：越界或非数值一律拒绝，返回错误信息（合法时为 null） */
+function validatePlanInputs() {
+  const rawP = $('#planP').value.trim();
+  if (rawP === '' || !Number.isFinite(Number(rawP))) {
+    return '请输入数值形式的预期正确率 p';
+  }
+  const p = Number(rawP);
+  if (p < PLANNER_P_MIN || p > PLANNER_P_MAX) {
+    return `预期正确率 p 必须在 ${PLANNER_P_MIN}～${PLANNER_P_MAX} 之间`;
+  }
+  const alpha = Number($('#planAlpha').value);
+  if (!PLANNER_ALPHAS.includes(alpha)) {
+    return '显著性水平 α 只允许 0.01、0.05 或 0.10';
+  }
+  const targetPower = Number($('#planPower').value);
+  if (!PLANNER_POWERS.includes(targetPower)) {
+    return '目标功效只允许 0.80、0.90 或 0.95';
+  }
+  return null;
+}
+
+async function runPlanner() {
+  const errEl = $('#planError');
+  errEl.textContent = '';
+  const msg = validatePlanInputs();
+  if (msg) {
+    errEl.textContent = msg;
+    $('#planResult').classList.add('hidden');
+    planResult = null;
+    return;
+  }
+
+  const btn = $('#btnPlan');
+  btn.disabled = true;
+  btn.textContent = '计算中…';
+  try {
+    const q = new URLSearchParams({
+      p: $('#planP').value.trim(),
+      alpha: $('#planAlpha').value,
+      targetPower: $('#planPower').value,
+    });
+    const res = await fetch('/api/plan?' + q.toString());
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || '规划计算失败');
+    planResult = data;
+    renderPlan(data);
+  } catch (e) {
+    $('#planResult').classList.add('hidden');
+    planResult = null;
+    errEl.textContent = e.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '计算规划';
+  }
+}
+
+function renderPlan(data) {
+  const targetPct = pct(data.targetPower);
+  const summary = $('#planSummary');
+  const tbody = $('#planTable tbody');
+  tbody.innerHTML = '';
+
+  for (const row of data.rows) {
+    const tr = document.createElement('tr');
+    if (!row.feasible) {
+      // 该 n 下不存在满足 α 的整数门槛（即使全对也压不到 α），跳过不参与达标
+      tr.className = 'no-k';
+      tr.innerHTML =
+        `<td>${row.n}</td><td colspan="4">无可行门槛（n 题全部答对的假阳性概率仍 &gt; ${pct(data.alpha)}）</td>`;
+    } else {
+      const reached = row.power >= data.targetPower - 1e-12;
+      if (reached) tr.className = 'reached';
+      if (data.recommendation && row.n === data.recommendation.n) {
+        tr.classList.add('recommend');
+      }
+      tr.innerHTML =
+        `<td>${row.n}</td>` +
+        `<td>${row.k}</td>` +
+        `<td>${pct(row.alphaTail)}</td>` +
+        `<td>${pct(row.power)}</td>` +
+        `<td>${reached ? '✓ 达标' : '—'}</td>`;
+    }
+    tbody.appendChild(tr);
+  }
+
+  const rec = data.recommendation;
+  const applyBtn = $('#btnApplyPlan');
+  if (rec) {
+    summary.className = 'plan-summary ok';
+    summary.textContent =
+      `推荐题数 n = ${rec.n}：答对至少 ${rec.k} 题即判定显著，` +
+      `实际功效 ${pct(rec.power)}（≥ 目标 ${targetPct}），` +
+      `假阳性概率 ${pct(rec.alphaTail)}（≤ α = ${pct(data.alpha)}）。`;
+    applyBtn.disabled = false;
+    applyBtn.textContent = `将推荐题数 ${rec.n} 填入上方题数字段`;
+  } else {
+    // 1～50 题内无任何题数达到目标功效：明确提示，并给出范围内的最好水平
+    let hint;
+    if (data.best) {
+      hint =
+        `在 n = 1～${data.nMax} 范围内，即使取最优题数 n = ${data.best.n}，` +
+        `实际功效最高也只有 ${pct(data.best.power)}，无法达到目标功效 ${targetPct}。`;
+    } else {
+      hint = `在 n = 1～${data.nMax} 范围内没有可行的判定门槛。`;
+    }
+    summary.className = 'plan-summary fail';
+    summary.textContent =
+      `${hint} 可适当提高预期正确率 p、放宽显著性水平 α 或降低目标功效后重新计算。`;
+    applyBtn.disabled = true;
+    applyBtn.textContent = '无可行题数，无法填入';
+  }
+
+  $('#planResult').classList.remove('hidden');
+}
+
+$('#plannerForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  runPlanner();
+});
+
+// α / 目标功效为固定档位，变更后若已有结果则自动重算；p 仍由按钮/回车提交
+$('#planAlpha').addEventListener('change', () => { if (planResult) runPlanner(); });
+$('#planPower').addEventListener('change', () => { if (planResult) runPlanner(); });
+
+// 将推荐 n 填入上方上传卡片的题数字段（由用户自行点击「开始测试」）
+$('#btnApplyPlan').addEventListener('click', () => {
+  if (!planResult || !planResult.recommendation) return;
+  const numInput = $('#numTrials');
+  numInput.value = planResult.recommendation.n;
+  numInput.focus();
+  numInput.classList.remove('flash');
+  // 强制重排后再加高亮类，保证闪烁动画生效
+  void numInput.offsetWidth;
+  numInput.classList.add('flash');
+  numInput.scrollIntoView({ block: 'center', behavior: 'smooth' });
+});
+
 // 启动 UI 刷新循环，并探测本机是否有可恢复的未提交会话
 tick();
 initRecovery();

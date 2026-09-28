@@ -51,6 +51,52 @@
         <button id="btnStart" class="primary">开始测试</button>
         <p id="uploadError" class="error"></p>
       </div>
+
+      <!-- 独立的题数规划器：纯统计计算，不创建会话、不保存任何数据 -->
+      <div class="card planner-card">
+        <h2>题数规划器</h2>
+        <p class="hint">在上传音频前估算需要多少题。检验规则为「n 题中答对至少 k 题则判定并非纯靠猜」：门槛 k 取满足假阳性概率 <code>P[Bin(n,0.5) ≥ k] ≤ α</code> 的最小整数，实际功效为 <code>P[Bin(n,p) ≥ k]</code>，全部使用<strong>精确二项尾概率</strong>（非正态近似）。本规划器仅在本机计算，<strong>不会创建测试会话</strong>。</p>
+        <form id="plannerForm" class="planner-form" novalidate>
+          <label class="field">
+            <span>预期正确率 p（0.51～0.99）</span>
+            <input type="number" id="planP" min="0.51" max="0.99" step="0.01" value="0.75" inputmode="decimal">
+          </label>
+          <label class="field">
+            <span>显著性水平 α</span>
+            <select id="planAlpha">
+              <option value="0.01">0.01（1%）</option>
+              <option value="0.05" selected>0.05（5%）</option>
+              <option value="0.10">0.10（10%）</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>目标功效（1 − β）</span>
+            <select id="planPower">
+              <option value="0.80" selected>0.80</option>
+              <option value="0.90">0.90</option>
+              <option value="0.95">0.95</option>
+            </select>
+          </label>
+          <button id="btnPlan" class="primary" type="submit">计算规划</button>
+        </form>
+        <p id="planError" class="error"></p>
+
+        <div id="planResult" class="plan-result hidden" aria-live="polite">
+          <p id="planSummary" class="plan-summary"></p>
+          <p class="hint">假阳性概率 = 纯靠猜（正确率 0.5）时答对至少 k 题的概率；实际功效 = 真实正确率为 p 时答对至少 k 题的概率。</p>
+          <div class="plan-table-wrap">
+            <table id="planTable">
+              <thead>
+                <tr>
+                  <th>题数 n</th><th>门槛 k</th><th>假阳性概率</th><th>实际功效</th><th>是否达标</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <button id="btnApplyPlan" type="button" class="primary">将推荐题数填入上方题数字段</button>
+        </div>
+      </div>
     </section>
 
     <!-- 视图 2：测试 -->

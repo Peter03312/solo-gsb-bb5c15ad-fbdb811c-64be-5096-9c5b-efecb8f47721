@@ -179,6 +179,113 @@ function clopperPearson(n, k) {
   return [lower, upper];
 }
 
+// ---------------------------------------------------------------------------
+// 题数规划器（上传页独立工具，无状态、不创建会话、不落盘）
+//
+// 输入预期正确率 p、显著性水平 α、目标功效 targetPower：
+// 对每个 n（1～MAX_TRIALS），取满足 P[Bin(n, 0.5) ≥ k] ≤ α 的最小整数
+// 门槛 k（1～n）；不存在这样的 k 时该行标 feasible=false 并跳过；
+// 否则以同一 k 计算真实功效 P[Bin(n, p) ≥ k]。
+// 全部尾概率使用上方 binomUpperTail 精确二项求和（log 系数展开，
+// n ≤ 50 直接相加），不使用正态近似。
+// ---------------------------------------------------------------------------
+
+const PLANNER_MIN_N = 1;
+const PLANNER_MAX_N = MAX_TRIALS;
+const PLANNER_P_MIN = 0.51;
+const PLANNER_P_MAX = 0.99;
+const PLANNER_ALPHA_SET = new Set([0.01, 0.05, 0.10]);
+const PLANNER_POWER_SET = new Set([0.80, 0.90, 0.95]);
+// 浮点比较容差：尾概率为求和得到的近似值，理论上恰等于目标时也视为达标
+const PLANNER_EPS = 1e-12;
+
+/** 读取严格的有限数值参数：非数值/不可解析一律拒绝（不做静默回退） */
+function parseStrictFinite(raw, name) {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return { error: `参数 ${name} 必须是数值` };
+  }
+  const v = Number(raw);
+  if (!Number.isFinite(v)) {
+    return { error: `参数 ${name} 必须是数值` };
+  }
+  return { value: v };
+}
+
+/**
+ * 单题数规划：返回 { n, k, alphaTail(假阳性概率), power(实际功效), feasible }。
+ * k 为满足精确零假设上尾概率 ≤ α 的最小整数门槛（1～n）；无门槛时 feasible=false。
+ */
+function planOneTrial(n, p, alpha) {
+  let k = null;
+  for (let cand = 1; cand <= n; cand++) {
+    if (binomUpperTail(n, cand, 0.5) <= alpha + PLANNER_EPS) {
+      k = cand;
+      break;
+    }
+  }
+  if (k === null) return { n, feasible: false };
+  return {
+    n,
+    k,
+    feasible: true,
+    alphaTail: binomUpperTail(n, k, 0.5), // 实际假阳性概率 P[Bin(n,0.5) ≥ k]
+    power: binomUpperTail(n, k, p),       // 实际功效 P[Bin(n,p) ≥ k]
+  };
+}
+
+app.get('/api/plan', (req, res) => {
+  const pParsed = parseStrictFinite(req.query.p, 'p');
+  if (pParsed.error) return res.status(400).json({ error: pParsed.error });
+  const aParsed = parseStrictFinite(req.query.alpha, 'alpha');
+  if (aParsed.error) return res.status(400).json({ error: aParsed.error });
+  const tParsed = parseStrictFinite(req.query.targetPower, 'targetPower');
+  if (tParsed.error) return res.status(400).json({ error: tParsed.error });
+
+  const p = pParsed.value;
+  const alpha = aParsed.value;
+  const targetPower = tParsed.value;
+
+  // 拒绝越界输入
+  if (p < PLANNER_P_MIN || p > PLANNER_P_MAX) {
+    return res.status(400).json({
+      error: `预期正确率 p 必须在 ${PLANNER_P_MIN}～${PLANNER_P_MAX} 之间`,
+    });
+  }
+  if (!PLANNER_ALPHA_SET.has(alpha)) {
+    return res.status(400).json({ error: '显著性水平 α 只允许 0.01、0.05 或 0.10' });
+  }
+  if (!PLANNER_POWER_SET.has(targetPower)) {
+    return res.status(400).json({ error: '目标功效只允许 0.80、0.90 或 0.95' });
+  }
+
+  // 逐个题数求最小门槛与实际功效（精确二项尾概率，非正态近似）
+  const rows = [];
+  let recommendation = null;
+  let best = null; // 可行题数中功效最高者（无达标题数时供提示参考）
+  for (let n = PLANNER_MIN_N; n <= PLANNER_MAX_N; n++) {
+    const row = planOneTrial(n, p, alpha);
+    rows.push(row);
+    if (row.feasible) {
+      if (!best || row.power > best.power) best = row;
+      // 第一个（即最小 n）功效达标的即为推荐
+      if (!recommendation && row.power >= targetPower - PLANNER_EPS) {
+        recommendation = row;
+      }
+    }
+  }
+
+  res.json({
+    p,
+    alpha,
+    targetPower,
+    nMin: PLANNER_MIN_N,
+    nMax: PLANNER_MAX_N,
+    rows,
+    recommendation, // 无达标题数时为 null
+    best,           // 可行题数中功效最高者（同样可能为 null）
+  });
+});
+
 /**
  * 把握度校准：按 6 个把握度档位分组统计。
  * 每档返回 { confidence, n, k, accuracy, ci, covered }；

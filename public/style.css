@@ -66,7 +66,8 @@ main {
 }
 
 input[type="file"],
-input[type="number"] {
+input[type="number"],
+select {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -487,6 +488,59 @@ tr.wrong td:last-child { color: var(--bad); }
 
 /* 把握度未落入区间的档位在表格中同步标红 */
 tr.miscal td:first-child { color: var(--danger); font-weight: 700; }
+
+/* 题数规划器 */
+.planner-card { border-color: #3a4360; }
+
+.planner-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.planner-form button { white-space: nowrap; }
+
+@media (max-width: 560px) {
+  .planner-form { grid-template-columns: 1fr; }
+}
+
+.plan-result { display: flex; flex-direction: column; gap: 0.75rem; }
+.plan-result.hidden { display: none; }
+
+.plan-summary { margin: 0; font-size: 0.95rem; line-height: 1.55; }
+.plan-summary.ok { color: var(--ok); font-weight: 600; }
+.plan-summary.fail { color: var(--danger); font-weight: 600; }
+
+.plan-table-wrap {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.plan-table-wrap table { font-size: 0.85rem; }
+.plan-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  z-index: 1;
+}
+
+#planTable td, #planTable th { font-variant-numeric: tabular-nums; padding: 0.4rem 0.5rem; }
+#planTable tr.reached td:last-child { color: var(--ok); font-weight: 600; }
+#planTable tr.recommend {
+  background: rgba(79, 140, 255, 0.14);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+#planTable tr.no-k td { color: var(--muted); font-size: 0.8rem; }
+
+/* 「填入题数字段」后对题数输入框短暂高亮 */
+@keyframes plan-flash {
+  0%, 100% { border-color: var(--border); box-shadow: none; }
+  30% { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.35); }
+}
+input.flash { animation: plan-flash 1.2s ease-out 1; }
 
 footer {
   text-align: center;
